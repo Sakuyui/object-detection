@@ -3,7 +3,7 @@ from vision.utils.misc import Timer
 import cv2
 import argparse
 from datetime import datetime
-
+import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path", type=str, default="./models/mb2-ssd.pth")
@@ -16,7 +16,6 @@ args = parser.parse_args()
 
 model_path = args.model_path
 label_path = args.label_path
-
 
 cap = cv2.VideoCapture(0)
 cap.set(3, args.width)
@@ -48,14 +47,16 @@ class ObjectActivationObserver():
         self.current_objects = {
         }
 
-    def append_object(self, label, pos_x1, pos_y1, pos_x2, pos_y2):
+    def append_object(self, label, pos_x1, pos_y1, pos_x2, pos_y2, feature_map):
         if label in self.current_objects:
             self.current_objects[label]['count'] += 1
             self.current_objects[label]['positions'].append([pos_x1, pos_y1, pos_x2, pos_y2])
+            self.current_objects[label]['features'].append(feature_map)
         else:
             self.current_objects[label] = {
                 'count': 1,
-                'positions': [[pos_x1, pos_y1, pos_x2, pos_y2]]
+                'positions': [[pos_x1, pos_y1, pos_x2, pos_y2]],
+                'features': [feature_map]
             }
     
     def objects(self):
@@ -78,7 +79,7 @@ class InformationDrawer():
                     1,  # font scale
                     (0, 0, 255),
                     2)  # line type
-            y_1 += 20
+            current_y += 20
     
     def print_object_counting_record(self, frame, object_counter: ObjectCounter, x_1, y_1):
         current_x = x_1
@@ -90,7 +91,7 @@ class InformationDrawer():
                     1,  # font scale
                     (0, 0, 255),
                     2)  # line type
-            y_1 += 20
+            current_y += 20
     
 class ObjectEventManager():
     def __init__(self, callback_object_in, callback_object_leave):
@@ -100,9 +101,10 @@ class ObjectEventManager():
     def eval_object_in_event(self, last_frame_object_observation, current_frame_object_observation):
         for object_name in current_frame_object_observation:
             current_record = current_frame_object_observation[object_name]
-            tackle_as_new_object = True
-            for current_position_record in current_record['positions']:
-                for last_position_record in last_frame_object_observation.get(object_name,{}).get('positions', []):
+            for index, current_position_record in enumerate(current_record['positions']):
+                tackle_as_new_object = True
+                last_record = last_frame_object_observation.get(object_name,{})
+                for last_position_record in last_record.get('positions', []):
                     last_x1 = last_position_record[0]
                     last_y1 = last_position_record[1]
                     last_x2 = last_position_record[2]
@@ -132,16 +134,28 @@ class ObjectEventManager():
                     overlap_percentage = overlap_area / last_area if last_area > 0 else 0.0
                     if overlap_percentage > 0.5:
                         tackle_as_new_object = False
+
+                        last_feature = last_record['features'][index]
+                        current_feature = current_record['features'][index]
+                        feature_similarity = np.dot(current_feature, last_feature) / (np.linalg.norm(current_feature) * np.linalg.norm(last_feature))
+                        if feature_similarity < 0.7:
+                            print(" - feature similarity:", feature_similarity)
+                            tackle_as_new_object = True
                         break
                 if tackle_as_new_object:
                     self.callback_object_in(object_name, current_position_record)
-
+        
     def eval_object_leave_event(self, last_frame_object_observation, current_frame_object_observation):
         for object_name in last_frame_object_observation:
+            # object record at the last frame
             last_record = last_frame_object_observation[object_name]
-            tackle_as_new_object = False
-            for last_position_record in last_record['positions']:
-                for current_position_record in current_frame_object_observation.get(object_name, {}).get('positions', []):
+            # iterate each object of a certain category.
+            for index, last_position_record in enumerate(last_record['positions']):
+                tackle_as_new_object = False
+
+                current_record = current_frame_object_observation.get(object_name, {})
+                # find a well-match object in current frame's object record.
+                for current_position_record in current_record.get('positions', []):
                     last_x1 = last_position_record[0]
                     last_y1 = last_position_record[1]
                     last_x2 = last_position_record[2]
@@ -169,8 +183,15 @@ class ObjectEventManager():
                     # For example:
                     last_area = (last_x2 - last_x1) * (last_y2 - last_y1)
                     overlap_percentage = overlap_area / last_area if last_area > 0 else 0.0
-                    if overlap_percentage > 0.5:
+                    # if two boxes are well overlapped and feature is so similarity
+                    if overlap_percentage > 0.7:
                         tackle_as_new_object = True
+                        # last_feature = last_record['features'][index]
+                        # current_feature = current_record['features'][index]
+                        # feature_similarity = np.dot(current_feature, last_feature) / (np.linalg.norm(current_feature) * np.linalg.norm(last_feature))
+                        # if feature_similarity < 0.7:
+                        #     print(" - feature similarity:", feature_similarity)
+                        #     tackle_as_new_object = False
                         break
                 if not tackle_as_new_object:
                     self.callback_object_leave(object_name, last_position_record)
@@ -188,7 +209,12 @@ event_manager = ObjectEventManager(_callback_object_in, _callback_object_leave)
 object_counter = ObjectCounter()
 object_observation_in_last_frame = {}
 
-# opencv loops
+scale_w = 150.0 / 1920.0
+scale_h = 150.0 / 1080.0
+hog = cv2.HOGDescriptor()
+
+
+# frame rendering loops
 while True:
     ret, orig_image = cap.read()
     if orig_image is None:
@@ -207,9 +233,13 @@ while True:
         pt_1_2 = int(box[1])
         pt_2_1 = int(box[2])
         pt_2_2 = int(box[3])
-        observer.append_object(class_names[labels[i]], pt_1_1, pt_1_2, pt_2_1, pt_2_2)
+        
+        ROI = orig_image[pt_1_2: max(pt_1_2 + 1, pt_2_2), pt_1_1: max(pt_1_1 + 1, pt_2_2)]
+        resized_ROI = cv2.resize(ROI, (150, 150)) 
+        box_feature = hog.compute(resized_ROI)
+        observer.append_object(class_names[labels[i]], pt_1_1, pt_1_2, pt_2_1, pt_2_2, box_feature)
         cv2.rectangle(orig_image, (pt_1_1, pt_1_2), (pt_2_1, pt_2_2), (255, 255, 0), 4)
-
+        
         cv2.putText(orig_image, label,
                     (pt_1_1 + 20, pt_1_2 + 40),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -217,7 +247,7 @@ while True:
                     (255, 0, 255),
                     2)  # line type
     info_drawer.print_objects_in_current_frame(orig_image, observer, 200, 20)
-    info_drawer.print_object_counting_record(orig_image, object_counter, 400, 20)
+    info_drawer.print_object_counting_record(orig_image, object_counter, 600, 20)
     event_manager.eval_object_in_event(object_observation_in_last_frame, observer.current_objects)
     event_manager.eval_object_leave_event(object_observation_in_last_frame, observer.current_objects)
     object_observation_in_last_frame = observer.current_objects
@@ -226,6 +256,7 @@ while True:
     cv2.imshow('annotated', orig_image)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+    
     
 cap.release()
 cv2.destroyAllWindows()

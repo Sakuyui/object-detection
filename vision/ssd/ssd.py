@@ -42,6 +42,8 @@ class SSD(nn.Module):
         locations = []
         start_layer_index = 0
         header_index = 0
+  
+        feature_map = None
         for end_layer_index in self.source_layer_indexes:
             if isinstance(end_layer_index, GraphPath):
                 path = end_layer_index
@@ -54,8 +56,10 @@ class SSD(nn.Module):
             else:
                 added_layer = None
                 path = None
+                
             for layer in self.base_net[start_layer_index: end_layer_index]:
                 x = layer(x)
+                
             if added_layer:
                 y = added_layer(x)
             else:
@@ -68,6 +72,7 @@ class SSD(nn.Module):
                 for layer in sub[path.s1:]:
                     x = layer(x)
                 end_layer_index += 1
+
             start_layer_index = end_layer_index
             confidence, location = self.compute_header(header_index, y)
             header_index += 1
@@ -79,6 +84,7 @@ class SSD(nn.Module):
 
         for layer in self.extras:
             x = layer(x)
+
             confidence, location = self.compute_header(header_index, x)
             header_index += 1
             confidences.append(confidence)
@@ -86,7 +92,7 @@ class SSD(nn.Module):
 
         confidences = torch.cat(confidences, 1)
         locations = torch.cat(locations, 1)
-        
+
         if self.is_test:
             confidences = F.softmax(confidences, dim=2)
             boxes = box_utils.convert_locations_to_boxes(
