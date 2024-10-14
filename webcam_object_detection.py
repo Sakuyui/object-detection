@@ -6,7 +6,6 @@ from datetime import datetime
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model", type=str, default="mb2-ssd")
 parser.add_argument("--model_path", type=str, default="./models/mb2-ssd.pth")
 parser.add_argument("--label_path", type=str, default="./models/voc-model-labels.txt")
 parser.add_argument("--width", type=int, default=1920)
@@ -15,7 +14,6 @@ parser.add_argument("--verbose_detection", type=bool, default=False)
 
 args = parser.parse_args()
 
-net_type = args.model
 model_path = args.model_path
 label_path = args.label_path
 
