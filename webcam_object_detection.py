@@ -85,8 +85,8 @@ class InformationDrawer():
     def print_object_counting_record(self, frame, object_counter: ObjectCounter, x_1, y_1):
         current_x = x_1
         current_y = y_1
-        for object_label in object_counter.counter:
-            cv2.putText(frame, f'{object_label}: {record}',
+        for object_name in object_counter.counter:
+            cv2.putText(frame, f'{object_name}: {object_counter.counter[object_name]}',
                     (current_x, current_y),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1,  # font scale
