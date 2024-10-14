@@ -32,6 +32,9 @@ predictor = create_mobilenetv2_ssd_lite_predictor(net, candidate_size=200)
 
 timer = Timer()
 
+global last_allocated_object_id
+last_allocated_object_id = 0
+
 class ObjectCounter():
     def __init__(self):
         self.counter = {}
@@ -47,16 +50,27 @@ class ObjectActivationObserver():
         self.current_objects = {
         }
 
-    def append_object(self, label, pos_x1, pos_y1, pos_x2, pos_y2, feature_map):
+    def append_object(self, object_name, pos_x1, pos_y1, pos_x2, pos_y2, feature):
+        global last_allocated_object_id
+        last_allocated_object_id += 1
         if label in self.current_objects:
-            self.current_objects[label]['count'] += 1
-            self.current_objects[label]['positions'].append([pos_x1, pos_y1, pos_x2, pos_y2])
-            self.current_objects[label]['features'].append(feature_map)
+            self.current_objects[object_name]['count'] += 1
+            self.current_objects[object_name]['records'][last_allocated_object_id] = {
+                'id': last_allocated_object_id,
+                'position': [pos_x1, pos_y1, pos_x2, pos_y2],
+                'features': feature
+            }
+
         else:
-            self.current_objects[label] = {
+            self.current_objects[object_name] = {
                 'count': 1,
-                'positions': [[pos_x1, pos_y1, pos_x2, pos_y2]],
-                'features': [feature_map]
+                'records': {
+                    last_allocated_object_id: {
+                        'id':last_allocated_object_id,
+                        'position': [pos_x1, pos_y1, pos_x2, pos_y2],
+                        'features': feature
+                    }
+                }
             }
     
     def objects(self):
@@ -100,11 +114,15 @@ class ObjectEventManager():
     
     def eval_object_in_event(self, last_frame_object_observation, current_frame_object_observation):
         for object_name in current_frame_object_observation:
-            current_record = current_frame_object_observation[object_name]
-            for index, current_position_record in enumerate(current_record['positions']):
+            current_record = current_frame_object_observation.get(object_name, {}).get('records', {})
+            
+            for index, current_record_key in enumerate(current_record):
                 tackle_as_new_object = True
-                last_record = last_frame_object_observation.get(object_name,{})
-                for last_position_record in last_record.get('positions', []):
+                last_record = last_frame_object_observation.get(object_name,{}).get("records", {})
+                current_position_record = current_record[current_record_key]['position']
+                for last_record_key in last_record:
+                    last_position_record = last_record[last_record_key]['position']
+                    
                     last_x1 = last_position_record[0]
                     last_y1 = last_position_record[1]
                     last_x2 = last_position_record[2]
@@ -134,8 +152,8 @@ class ObjectEventManager():
                     overlap_percentage = overlap_area / last_area if last_area > 0 else 0.0
                     if overlap_percentage > 0.5:
                         tackle_as_new_object = False
-                        last_feature = last_record['features'][index]
-                        current_feature = current_record['features'][index]
+                        last_feature = last_record[last_record_key]['features']
+                        current_feature = current_record[current_record_key]['features']
                         if last_feature is not None and current_feature is not None:
                             feature_similarity = np.dot(current_feature, last_feature) / (np.linalg.norm(current_feature) * np.linalg.norm(last_feature))
                             if feature_similarity < 0.55:
@@ -143,19 +161,21 @@ class ObjectEventManager():
                                 tackle_as_new_object = True
                         break
                 if tackle_as_new_object:
-                    self.callback_object_in(object_name, current_position_record)
+                    self.callback_object_in(object_name, current_record_key, current_position_record)
         
     def eval_object_leave_event(self, last_frame_object_observation, current_frame_object_observation):
         for object_name in last_frame_object_observation:
             # object record at the last frame
-            last_record = last_frame_object_observation[object_name]
+            last_record = last_frame_object_observation.get(object_name, {}).get("records", {})
             # iterate each object of a certain category.
-            for index, last_position_record in enumerate(last_record['positions']):
+            for index, last_record_key in enumerate(last_record):
                 tackle_as_new_object = False
+                last_position_record = last_record[last_record_key]['position']
 
-                current_record = current_frame_object_observation.get(object_name, {})
+                current_record = current_frame_object_observation.get(object_name, {}).get('records', {})
                 # find a well-match object in current frame's object record.
-                for current_position_record in current_record.get('positions', []):
+                for current_record_key in current_record:
+                    current_position_record = current_record[current_record_key]['position']
                     last_x1 = last_position_record[0]
                     last_y1 = last_position_record[1]
                     last_x2 = last_position_record[2]
@@ -194,14 +214,14 @@ class ObjectEventManager():
                         #     tackle_as_new_object = False
                         break
                 if not tackle_as_new_object:
-                    self.callback_object_leave(object_name, last_position_record)
+                    self.callback_object_leave(object_name, last_record_key, last_position_record)
                     
-def _callback_object_in(object_name, new_object_position):
-    print(f"[{datetime.now()}] obj {object_name} - in")
+def _callback_object_in(object_name, object_id, new_object_position):
+    print(f"[{datetime.now()}] obj {object_name} - in.")
     object_counter.increase(object_name)
 
-def _callback_object_leave(object_name, old_object_position):
-    print(f"[{datetime.now()}] obj {object_name} - leave")
+def _callback_object_leave(object_name, object_id, old_object_position):
+    print(f"[{datetime.now()}] obj {object_name} leave")
 
 info_drawer = InformationDrawer()
 observer = ObjectActivationObserver()
@@ -212,7 +232,6 @@ object_observation_in_last_frame = {}
 scale_w = 150.0 / 1920.0
 scale_h = 150.0 / 1080.0
 hog = cv2.HOGDescriptor()
-
 
 # frame rendering loops
 while True:
