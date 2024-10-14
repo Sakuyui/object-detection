@@ -134,13 +134,13 @@ class ObjectEventManager():
                     overlap_percentage = overlap_area / last_area if last_area > 0 else 0.0
                     if overlap_percentage > 0.5:
                         tackle_as_new_object = False
-
                         last_feature = last_record['features'][index]
                         current_feature = current_record['features'][index]
-                        feature_similarity = np.dot(current_feature, last_feature) / (np.linalg.norm(current_feature) * np.linalg.norm(last_feature))
-                        if feature_similarity < 0.7:
-                            print(" - feature similarity:", feature_similarity)
-                            tackle_as_new_object = True
+                        if last_feature is not None and current_feature is not None:
+                            feature_similarity = np.dot(current_feature, last_feature) / (np.linalg.norm(current_feature) * np.linalg.norm(last_feature))
+                            if feature_similarity < 0.55:
+                                print(" - feature similarity:", feature_similarity)
+                                tackle_as_new_object = True
                         break
                 if tackle_as_new_object:
                     self.callback_object_in(object_name, current_position_record)
@@ -235,9 +235,11 @@ while True:
         pt_2_2 = int(box[3])
         
         ROI = orig_image[pt_1_2: max(pt_1_2 + 1, pt_2_2), pt_1_1: max(pt_1_1 + 1, pt_2_2)]
-        resized_ROI = cv2.resize(ROI, (150, 150)) 
-        box_feature = hog.compute(resized_ROI)
-        observer.append_object(class_names[labels[i]], pt_1_1, pt_1_2, pt_2_1, pt_2_2, box_feature)
+        ROI_feature = None
+        if not any(x == 0 for x in ROI.shape):
+            resized_ROI = cv2.resize(ROI, (150, 150)) 
+            ROI_feature = hog.compute(resized_ROI)
+        observer.append_object(class_names[labels[i]], pt_1_1, pt_1_2, pt_2_1, pt_2_2, ROI_feature)
         cv2.rectangle(orig_image, (pt_1_1, pt_1_2), (pt_2_1, pt_2_2), (255, 255, 0), 4)
         
         cv2.putText(orig_image, label,
